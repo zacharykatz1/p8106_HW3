@@ -1,0 +1,81 @@
+---
+title: "P8106: Data Science II, Homework #3"
+author: 'Zachary Katz (UNI: zak2132)'
+date: "3/25/2022"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 3
+  header-includes:
+    -\usepackage{fancyhdr}
+    -\usepackage{lipsum}
+    -\pagestyle{fancy}
+    -\fancyhead[R]{\thepage}
+    -\fancypagestyle{plain}{\pagestyle{fancy}}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(viridis)
+
+# Set global options for embedding plots and choosing themes
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+## Set-Up and Data Preprocessing
+
+```{r}
+set.seed(2132)
+
+# Load data, clean column names, eliminate rows containing NA entries
+data = read_csv("./Data/auto.csv") %>% 
+  janitor::clean_names() %>% 
+  na.omit() %>% 
+  mutate(
+    year = as.factor(year),
+    origin = as.factor(origin),
+    mpg_cat = as.factor(mpg_cat)
+  )
+
+# Partition data into training/test sets
+indexTrain = createDataPartition(y = data$mpg_cat,
+                                 p = 0.7,
+                                 list = FALSE)
+
+training_df = data[indexTrain, ]
+
+testing_df = data[-indexTrain, ]
+
+# Create matrices for future analysis
+
+# Training data
+x_train = model.matrix(mpg_cat~.,training_df)[, -1]
+y_train = training_df$mpg_cat
+
+# Testing data
+x_test <- model.matrix(mpg_cat~.,testing_df)[, -1]
+y_test <- testing_df$mpg_cat
+```
+
+## Part (a): Exploratory Data Analysis
+
+```{r}
+# Summary statistics
+summary(data)
+skimr::skim(data)
+```
+
+In total, our data set has...
