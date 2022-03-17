@@ -15,11 +15,25 @@ output:
     -\fancypagestyle{plain}{\pagestyle{fancy}}
 ---
 
+## Set-Up and Data Preprocessing
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
 library(tidyverse)
 library(viridis)
+library(Seurat)
+library(AppliedPredictiveModeling)
+library(caret)
+library(glmnet)
+library(mlbench)
+library(pROC)
+library(pdp)
+library(vip)
+library(klaR)
+library(ggcorrplot)
+library(MASS)
+library(ggroc)
 
 # Set global options for embedding plots and choosing themes
 knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
@@ -35,15 +49,16 @@ scale_colour_discrete = scale_colour_viridis_d
 scale_fill_discrete = scale_fill_viridis_d
 ```
 
-## Set-Up and Data Preprocessing
-
 ```{r}
 set.seed(2132)
 
 # Load data, clean column names, eliminate rows containing NA entries
-data = read_csv("./Data/auto.csv") %>% 
+data_raw = read_csv("./Data/auto.csv") %>% 
   janitor::clean_names() %>% 
   na.omit() %>% 
+  as.data.frame()
+
+data = data_raw %>% 
   mutate(
     year = as.factor(year),
     origin = as.factor(origin),
@@ -78,4 +93,192 @@ summary(data)
 skimr::skim(data)
 ```
 
-In total, our data set has...
+```{r}
+# Simple visualizations of the data
+
+# Feature plot for all data (training and test)
+theme1 = transparentTheme(trans = 0.4)
+trellis.par.set(theme1)
+
+full_predictor_matrix = model.matrix(mpg_cat ~., data_raw)[, -1]
+full_outcome_vector = as.factor(data_raw$mpg_cat)
+
+featurePlot(x = full_predictor_matrix,
+            y = full_outcome_vector,
+            scales = list(x = list(relation = "free"),
+                          y = list(relation = "free")),
+            plot = "density", pch = "|",
+            auto.key = list(columns = 2))
+
+# Partition plot (LDA based on every combination of two variables) for training data only
+partimat(full_outcome_vector ~ full_predictor_matrix, subset = indexTrain, method = "lda")
+
+# Correlation plot for all data
+model.matrix(~0+., data = data) %>% 
+  cor(use = "pairwise.complete.obs") %>% 
+  ggcorrplot(show.diag = F, type = "lower", lab = TRUE, lab_size = 2)
+```
+
+## Part (b): Logistic Regression
+
+```{r}
+set.seed(2132)
+
+# Logistic regression using the training data (note: not using penalized logistic regression in this case): predict.glm
+glm.fit = glm(mpg_cat ~ .,
+              data = data,
+              subset = indexTrain,
+              family = binomial(link = "logit"))
+
+# Check for statistically significant predictors
+summary(glm.fit)
+
+# Alternatively, using caret (to compare cross-validation with other models, rather than tuning the model); gives identical answer to above
+ctrl = trainControl(method = "repeatedcv",
+                    repeats = 5
+                    summaryFunction = twoClassSummary,
+                    classProbs = TRUE)
+
+set.seed(2132)
+
+glm.logit.caret = train(x = data[indexTrain, 1:7],
+                        y = data$mpg_cat[indexTrain],
+                        method = "glm",
+                        metric = "ROC",
+                        trControl = ctrl)
+
+summary(glm.logit.caret)
+```
+
+```{r}
+# Check performance on test data (use simple classifier with cut-off of 0.5)
+test.pred.prob = predict(glm.fit, newdata = data[-indexTrain,],
+                           type = "response")
+
+test.pred = rep("high", length(test.pred.prob))
+
+test.pred[test.pred.prob>0.5] = "low"
+
+confusionMatrix(data = as.factor(test.pred),
+                reference = data$mpg_cat[-indexTrain],
+                positive = "high")
+```
+
+## Part (c): MARS Model
+
+```{r}
+# Train MARS model using the training data
+set.seed(2132)
+
+model.mars = train(x = data[indexTrain, 1:7],
+                   y = data$mpg_cat[indexTrain],
+                   method = "earth",
+                   tuneGrid = expand.grid(degree = 1:3,
+                                          nprune = 2:25),
+                   metric = "ROC",
+                   trControl = ctrl)
+
+summary(model.mars)
+
+plot(model.mars)
+
+coef(model.mars$finalModel)
+
+vip(model.mars$finalModel)
+```
+
+## Part (d): LDA & QDA
+
+```{r}
+# LDA using the training data
+lda.fit = lda(mpg_cat ~ ., data = data, subset = indexTrain)
+
+# Plot the linear discriminants from LDA
+plot(lda.fit, col = as.numeric(data$mpg_cat), abbrev = TRUE)
+
+# Obtain scaling matrix
+lda.fit$scaling
+```
+
+```{r}
+# Alternatively, use caret for LDA
+set.seed(2132)
+
+model.lda = train(x = data_raw[indexTrain, 1:7],
+                   y = data$mpg_cat[indexTrain],
+                   method = "lda",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+model.lda$results
+```
+
+```{r}
+# Train a QDA model on the training data
+qda.fit = qda(mpg_cat~., data = data,
+               subset = indexTrain)
+
+# Obtain scaling matrix
+qda.fit$scaling
+
+# Alternatively, use caret for QDA
+set.seed(2132)
+
+model.qda = train(x = data_raw[indexTrain, 1:7],
+                   y = data$mpg_cat[indexTrain],
+                   method = "qda",
+                   metric = "ROC",
+                   trControl = ctrl)
+
+model.qda$results
+```
+
+## Part (e): Model Comparison and AUC/ROC
+
+```{r}
+# Model comparison based on ROC (training data)
+res = resamples(list(LOGISTIC = glm.logit.caret,
+                     MARS = model.mars,
+                     LDA = model.lda,
+                     QDA = model.qda))
+
+summary(res)
+
+bwplot(res, metric = "ROC")
+```
+
+```{r}
+# Predictions and ROC
+lda.predict = predict(model.lda, newdata = data_raw[-indexTrain, 1:7], type = "prob")[,2]
+
+roc.lda = roc(data$mpg_cat[-indexTrain], lda.predict)
+
+# Report AUC and misclassification rate
+auc_lda = roc.lda$auc[1]
+
+auc_lda
+
+# Obtain classes
+lda_class = lda.predict %>% 
+  as.data.frame() %>% 
+  mutate(
+    class = case_when(. < 0.50 ~ "high",
+                      . > 0.50 ~ "low")
+  ) %>% 
+  dplyr::select(class) %>% 
+  as.matrix()
+
+# Confusion matrix and misclassification error rate
+confusionMatrix(data = as.factor(lda_class),
+                reference = data$mpg_cat[-indexTrain],
+                positive = "high")
+
+# Plot ROC curve for best model (LDA)
+modelName = "LDA model"
+
+ggroc(list(roc.lda), legacy.axes = TRUE) + 
+  scale_color_discrete(labels = paste0(modelName, " (", round(auc_lda, 2),")"),
+                       name = "Model Type (AUC)") + 
+  geom_abline(intercept = 0, slope = 1, color = "grey")
+```
+
