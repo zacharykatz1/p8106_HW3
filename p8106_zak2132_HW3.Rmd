@@ -34,6 +34,9 @@ library(klaR)
 library(ggcorrplot)
 library(MASS)
 library(ggROC)
+library(reshape2)
+library(ggridges)
+library(DataExplorer)
 
 # Set global options for embedding plots and choosing themes
 knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
@@ -50,20 +53,24 @@ scale_fill_discrete = scale_fill_viridis_d
 ```
 
 ```{r}
-set.seed(2132)
+set.seed(77)
 
 # Load data, clean column names, eliminate rows containing NA entries
-data_raw = read_csv("./Data/auto.csv") %>% 
+data = read_csv("./Data/auto.csv") %>% 
   janitor::clean_names() %>% 
   na.omit() %>% 
-  as.data.frame()
-
-data = data_raw %>% 
+  distinct() %>% 
   mutate(
+    cylinders = as.factor(cylinders),
     year = as.factor(year),
+    origin = case_when(origin == "1" ~ "American",
+                       origin == "2" ~ "European",
+                       origin == "3" ~ "Japanese"),
     origin = as.factor(origin),
-    mpg_cat = as.factor(mpg_cat)
-  )
+    mpg_cat = as.factor(mpg_cat),
+    mpg_cat = fct_relevel(mpg_cat, "low")
+  ) %>% 
+  as.data.frame()
 
 # Partition data into training/test sets (70% split)
 indexTrain = createDataPartition(y = data$mpg_cat,
@@ -76,44 +83,60 @@ indexTrain = createDataPartition(y = data$mpg_cat,
 ```{r}
 # Summary statistics
 summary(data)
-skimr::skim(data)
+skimr::skim_without_charts(data)
 ```
 
-We have 392 observations with 8 parameters: 7 predictors, including 5 continuous variables (`cylinders`, `displacement`, `horsepower`, `weight`, `acceleration`) and 2 categorical variables (`year`, `origin`), along with one binary outcome variable, `mpg_cat`, which takes values "high" and "low." Half our observations have the "high" label while the other half have the "low" label.  
+We have 392 observations with 8 parameters: 7 predictors, including 4 continuous variables (`displacement`, `horsepower`, `weight`, `acceleration`) and 3 categorical variables (`cylinders`, `year`, `origin`), along with one binary outcome variable, `mpg_cat`, which takes values "high" and "low." Half our observations have the "high" label while the other half have the "low" label.  
 
 ```{r}
 # Simple visualizations of the data
 
-# Feature plot for all data (training and test)
+# Feature plot for all data (training and test), continuous predictors only
 theme1 = transparentTheme(trans = 0.4)
 trellis.par.set(theme1)
 
-full_predictor_matrix = model.matrix(mpg_cat ~., data_raw)[, -1]
-full_outcome_vector = as.factor(data_raw$mpg_cat)
-
-featurePlot(x = full_predictor_matrix,
-            y = full_outcome_vector,
+featurePlot(x = data %>% dplyr::select(horsepower, displacement, acceleration, weight),
+            y = data$mpg_cat,
             scales = list(x = list(relation = "free"),
                           y = list(relation = "free")),
             plot = "density", pch = "|",
             auto.key = list(columns = 2))
 
-# Partition plot (LDA based on every combination of two variables) for training data only
-partimat(full_outcome_vector ~ full_predictor_matrix, subset = indexTrain, method = "lda")
+# Alternative view: Distributions of continuous variables factored by outcome
+data %>% 
+  dplyr::select(displacement, horsepower, weight, acceleration, mpg_cat) %>% 
+  melt(id.vars= "mpg_cat") %>% 
+  ggplot(aes(x = value, y = mpg_cat)) + 
+  stat_density_ridges(aes(color = mpg_cat, fill = mpg_cat), alpha = 0.2, quantile_lines = TRUE, quantiles = 2, jittered_points = TRUE) + 
+  facet_wrap(~variable, scales = "free", nrow = 2) + 
+  labs(x = "",
+        y = "Density",
+       fill = "MPG Class",
+       color = "MPG Class")
+
+# Distributions of categorical variables factored by outcome
+data %>% 
+  dplyr::select(-displacement, -horsepower, -weight, -acceleration) %>% 
+  melt(id.vars = "mpg_cat") %>% 
+  ggplot(aes(x = value, fill = mpg_cat)) + 
+  geom_bar(position = "fill") + 
+  facet_wrap(~variable, scales = "free", nrow = 2) + 
+  scale_y_continuous(labels = scales::percent) + 
+  labs(x = "",
+        y = "Proportion by MPG Category",
+       fill = "MPG Category",
+       color = "MPG Category")
 
 # Correlation plot for all data
 model.matrix(~0+., data = data) %>% 
   cor(use = "pairwise.complete.obs") %>% 
   ggcorrplot(show.diag = F, type = "lower", lab = TRUE, lab_size = 2)
+
+# LDA partition plots (continuous vars only), all data
+partimat(mpg_cat ~ displacement + horsepower + weight + acceleration, method = "lda", data = data)
 ```
 
-We conduct three basic exploratory analyses: we construct a feature plot showing the probability density distribution of each predictor variable split by class of `mpg_cat`, partition plots for each pair of predictor variables (training data only), and a correlation plot for our parameters as well. 
-
-From the feature plot, we see that cars with low mpg are disproportionately from Origin 1; that cars with low mpg tend to be heavier, have more cylinders, higher displacement, and higher horsepower; and that cars with lower mpg tend to be from earlier years and have lower acceleration. 
-
-From the partition plots using LDA, we see how we would partition the classes based on every combination of two variables, giving us the decision boundary. Red points are considered misclassified. Our error rate is lowest for the following combinations of two predictors: `weight` and `displacement`; `year` and `cylinders`; and `year` and `weight`. On the other hand, our error rate is highest for `year` and `acceleration`, as well as for `origin` and acceleration. However, in this case, we haven't yet treated `year` and `origin` as factor variables so the decision boundaries are somewhat misleading. 
-
-Finally, from the correlation plot, we see that our outcome variable has the highest correlation with `cylinders`, `weight`, and `displacement`. Moreover, `cylinders`, `displacemebt`, and `horsepower` all have high collinearity, potentially leading to some redundancy in a model that includes all three covariates.
+We conduct a few basic exploratory analyses. First, our feature plot of continuous covariates shows that cars with high MPG tend to have lower displacement, lower horsepower, lower weight, and higher acceleration. Similarly, looking at categorical covariates, we find that cars with higher MPG tend to have 4 or 5 cylinders, come from the 1980s (rather than 1970s), and be European or Japanese rather than American. From the correlation plot, we see that high MPG has the most positive correlation with the indicator for having 4 cylinders, and the most negative correlation with weight, displacement, and horsepower. There may also be some collinearity between these three continuous variables, potentially leading to some redundancy in the model. Finally, from the partition plots using LDA, we see how we would partition the classes based on every combination of two variables (continuous only), giving us the decision boundary. Red points are considered misclassified. Our error rate is lowest for the following combinations of two predictors: `horsepower` and `displacement`, and `acceleration` and `displacement`. On the other hand, our error rate is highest for `acceleration` and `horsepower`. (Note that we exclude factor variables from this analysis because the decision boundaries would be somewhat misleading.)
 
 ## Part (b): Logistic Regression
 
@@ -128,47 +151,36 @@ glm.fit = glm(mpg_cat ~ .,
 
 # Check for statistically significant predictors
 summary(glm.fit)
-
-# Alternatively, using caret (to compare cross-validation with other models, rather than tuning the model); gives identical answer to above
-ctrl = trainControl(method = "repeatedcv",
-                    repeats = 5,
-                    summaryFunction = twoClassSummary,
-                    classProbs = TRUE)
-
-set.seed(2132)
-
-glm.logit.caret = train(x = data[indexTrain, 1:7],
-                        y = data$mpg_cat[indexTrain],
-                        method = "glm",
-                        metric = "ROC",
-                        trControl = ctrl)
-
-summary(glm.logit.caret)
 ```
 
-With two methods, we build a logistic regression model (without penalization) from our training data. At the 0.01 significance level, `weight` is a significant predictor of our outcome `mpg_cat`. At the 0.1 significance level, i.e. less significantly than `weight`, our indicator variables `year79`, `year80`, `year81`, `year82`, and `origin2` are significant predictors of our outcome as well.
+Here, we build a logistic regression model (without penalization) from our training data. At the 0.05 significance level, `weight`, `horsepower`, and `year79` are significant predictors of our outcome `mpg_cat`. At the 0.01 significance level, i.e. even more significantly, our indicator variable `year81` is a statistically significant predictor of our outcome as well.
 
-```{r}
+```{r warning=FALSE, message=FALSE}
 # Check performance on test data (use simple classifier with cut-off of 0.5)
 test.pred.prob = predict(glm.fit, newdata = data[-indexTrain,],
                            type = "response")
 
-test.pred = rep("high", length(test.pred.prob))
+test.pred = rep("low", length(test.pred.prob))
 
-test.pred[test.pred.prob>0.5] = "low"
+test.pred[test.pred.prob>0.5] = "high"
 
 confusionMatrix(data = as.factor(test.pred),
                 reference = data$mpg_cat[-indexTrain],
                 positive = "high")
 ```
 
-Our confusion matrix shows that our accuracy, or overall fraction of correct predictions, is roughly 92% (95% CI: 86% to 96%) once our model is applied to test data. The confusion matrix also tells us that our no information rate is 50%, which means that if we had no information and made the same class prediction for all observations, our model would be 50% accurate. Our p-value near 0 tells us that our accuracy is statistically significantly better than our no information rate. The model' is 96.6% sensitive (true detected positives out of all actual positives) and 87.9% specific (true detected negatives out of all actual negatives), with a positive predictive value of 88.9% (true detected positives out of all predicted positives) and a negative predictive value of 96.2% (true detected negatives out of all predicted negatives). Our sensitivity and specificity average to 92.2%, which is our balanced accuracy. Our kappa, at 0.8448, means that our interrater agreement is quite high, even accounting for the possibility of agreement by chance.
+Our confusion matrix shows that our accuracy, or overall fraction of correct predictions, is roughly 92% (95% CI: 86% to 96%) once our model is applied to test data. The confusion matrix also tells us that our no information rate is 50%, which means that if we had no information and made the same class prediction for all observations, our model would be 50% accurate. Our p-value near 0 tells us that our accuracy is statistically significantly better than our no information rate. The model' is 96.7% sensitive (true detected positives out of all actual positives) and 87.9% specific (true detected negatives out of all actual negatives), with a positive predictive value of 88.9% (true detected positives out of all predicted positives) and a negative predictive value of 96.2% (true detected negatives out of all predicted negatives). Our sensitivity and specificity average to 92.2%, which is our balanced accuracy. Our kappa, at 0.8448, means that our inter-rater agreement is quite high, even accounting for the possibility of agreement by chance.
 
 ## Part (c): MARS Model
 
 ```{r}
 # Train MARS model using the training data
 set.seed(2132)
+
+ctrl = trainControl(method = "repeatedcv",
+                    summaryFunction = twoClassSummary,
+                    repeats = 5,
+                    classProbs = TRUE)
 
 model.mars = train(x = data[indexTrain, 1:7],
                    y = data$mpg_cat[indexTrain],
@@ -180,16 +192,18 @@ model.mars = train(x = data[indexTrain, 1:7],
 
 summary(model.mars)
 
-plot(model.mars)
+ggplot(model.mars, highlight = T)
+
+model.mars$bestTune %>% knitr::kable()
 
 coef(model.mars$finalModel) %>% knitr::kable(col.names = "Coefficient")
 
 vip(model.mars$finalModel)
 ```
 
-Overall, our MARS model tells us that `displacement` is the most important continuous variable, with indicators `year82` and `year73` following closely behind, based on the overall impact of each variable on our regression function following a backward elimination procedure. Using `earth`, our model selects 15 out of 24 terms, representing 9 of 19 predictors (nprune terms = 17, product degree = 3). The model is optimized with and has an R-squared of 0.789.
+Overall, our MARS model tells us that `cylinders4` (indicator for having 4 cylinders) is the most important  variable, with continuous variable `weight` and indicators `year82`, `year80`, and `year72` following closely behind, based on the overall impact of each variable on our regression function following a backward elimination procedure. Using `earth`, our model selects 14 out of 26 terms, representing 8 of 22 predictors (nprune terms = 15, product degree = 1). The model is optimized with and has an R-squared of 0.769.
 
-## Part (d): LDA & QDA
+## Part (d): LDA
 
 ```{r}
 # LDA using the training data
@@ -202,53 +216,42 @@ plot(lda.fit, col = as.numeric(data$mpg_cat), abbrev = TRUE)
 lda.fit$scaling
 ```
 
-LDA has no tuning parameters, and allows us to classify by nearest centroid. Because we have two classes, we have k = 2-1 = 1 linear discriminants, and so our linear discriminant plot gives us the histogram of our transformed X (predictors) for both classes. In this case, when our "X" is lower, we tend to classify in the high `mpg_cat` group, whereas when our "X" is higher, we tend to classify in the low `mpg_cat` group. Finally, the scaling object gives us our matrix A, which is (k-1) x p matrix, or in this case, a simple column vector with one entry per predictor, given we only have two outcome classes. This matrix allows us to build our x-tilde for each observation / data point.
+LDA has no tuning parameters, and allows us to classify by nearest centroid. Because we have two classes, we have k = 2-1 = 1 linear discriminants, and so our linear discriminant plot gives us the histogram of our transformed X (predictors) for both classes. In this case, when our "X" is lower, we tend to classify in the high `mpg_cat` group, whereas when our "X" is higher, we tend to classify in the low `mpg_cat` group. Finally, the scaling object gives us our matrix A, which is (k-1) x p matrix, or in this case, a simple column vector with one entry per predictor, given we only have two outcome classes. This matrix allows us to build our x-tilde (which is AX, a product of our transformation matrix and original predictors) for each observation / data point.
 
 ```{r}
 # Alternatively, use caret for LDA
 set.seed(2132)
+    
+training_df = data[indexTrain, ]
 
-model.lda = train(x = data_raw[indexTrain, 1:7],
-                   y = data$mpg_cat[indexTrain],
-                   method = "lda",
-                   metric = "ROC",
-                   trControl = ctrl)
+model.lda = train(mpg_cat ~ .,
+                  data = training_df,
+                  method = "lda",
+                  metric = "ROC",
+                  trControl = ctrl)
 
 model.lda$results
 ```
 
-For completeness, we also run an LDA model using `caret`, which has a 0.957 ROC, with 97% sensitivity and 84% specificity. We also run a QDA model as follows using both methods as well:
-
-```{r}
-# Train a QDA model on the training data
-qda.fit = qda(mpg_cat~., data = data,
-               subset = indexTrain)
-
-# Obtain scaling matrix
-qda.fit$scaling
-
-# Alternatively, use caret for QDA
-set.seed(2132)
-
-model.qda = train(x = data_raw[indexTrain, 1:7],
-                   y = data$mpg_cat[indexTrain],
-                   method = "qda",
-                   metric = "ROC",
-                   trControl = ctrl)
-
-model.qda$results
-```
-
-Our QDA model in `caret` using training data gives us a slightly worse ROC (0.945) and sensitivity (90%), but a bit better specificity (89%) compared to the LDA model, at first glance.
+For completeness, we also run an LDA model using `caret`, which has a 0.958 ROC, with 84% sensitivity and 97% specificity. 
 
 ## Part (e): Model Comparison and AUC/ROC
 
 ```{r}
 # Model comparison based on ROC (training data)
+
+# Run caret logistic model
+set.seed(2132)
+
+glm.logit.caret = train(x = data[indexTrain, 1:7],
+                        y = data$mpg_cat[indexTrain],
+                        method = "glm",
+                        metric = "ROC",
+                        trControl = ctrl)
+
 res = resamples(list(LOGISTIC = glm.logit.caret,
                      MARS = model.mars,
-                     LDA = model.lda,
-                     QDA = model.qda))
+                     LDA = model.lda))
 
 summary(res)
 
@@ -259,7 +262,7 @@ Based on resampling / general cross-validation from how our models perform on th
 
 ```{r}
 # Predictions and ROC
-lda.predict = predict(model.lda, newdata = data_raw[-indexTrain, 1:7], type = "prob")[,2]
+lda.predict = predict(model.lda, newdata = data[-indexTrain, 1:7], type = "prob")[,2]
 
 roc.lda = roc(data$mpg_cat[-indexTrain], lda.predict)
 
@@ -272,8 +275,8 @@ auc_lda
 lda_class = lda.predict %>% 
   as.data.frame() %>% 
   mutate(
-    class = case_when(. < 0.50 ~ "high",
-                      . > 0.50 ~ "low")
+    class = case_when(. < 0.50 ~ "low",
+                      . > 0.50 ~ "high")
   ) %>% 
   dplyr::select(class) %>% 
   as.matrix()
@@ -292,4 +295,4 @@ pROC::ggroc(list(roc.lda), legacy.axes = TRUE) +
   geom_abline(intercept = 0, slope = 1, color = "grey")
 ```
 
-When applied to the previously unseen test data, the LDA model has a misclassification rate of 1 - 0.8966, or ~10%, and an AUC of 0.95, as observed on our ROC plot above.
+When applied to the previously unseen test data, the LDA model has a misclassification rate of 1 - 0.9397, or ~6%, when we use a threshold of 0.5 probability, as well as an AUC of 0.989, as observed on our ROC plot above.
