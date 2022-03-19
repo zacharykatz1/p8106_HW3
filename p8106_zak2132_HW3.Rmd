@@ -33,7 +33,7 @@ library(vip)
 library(klaR)
 library(ggcorrplot)
 library(MASS)
-library(ggroc)
+library(ggROC)
 
 # Set global options for embedding plots and choosing themes
 knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center")
@@ -79,7 +79,7 @@ summary(data)
 skimr::skim(data)
 ```
 
-We have 392 observations with 8 parameters: 7 predictors, including 5 continuous variables (`cylinders`, `displacement`, `horsepower`, `weight`, `acceleration`) and 2 categorical variables (`year` and `origin`), along with one binary outcome variable, `mpg_cat`, which takes values "high" and "low." Half our observations have the "high" label while the other half have the "low" label.  
+We have 392 observations with 8 parameters: 7 predictors, including 5 continuous variables (`cylinders`, `displacement`, `horsepower`, `weight`, `acceleration`) and 2 categorical variables (`year`, `origin`), along with one binary outcome variable, `mpg_cat`, which takes values "high" and "low." Half our observations have the "high" label while the other half have the "low" label.  
 
 ```{r}
 # Simple visualizations of the data
@@ -111,7 +111,7 @@ We conduct three basic exploratory analyses: we construct a feature plot showing
 
 From the feature plot, we see that cars with low mpg are disproportionately from Origin 1; that cars with low mpg tend to be heavier, have more cylinders, higher displacement, and higher horsepower; and that cars with lower mpg tend to be from earlier years and have lower acceleration. 
 
-From the partition plots, we see [TO DO].
+From the partition plots using LDA, we see how we would partition the classes based on every combination of two variables, giving us the decision boundary. Red points are considered misclassified. Our error rate is lowest for the following combinations of two predictors: `weight` and `displacement`; `year` and `cylinders`; and `year` and `weight`. On the other hand, our error rate is highest for `year` and `acceleration`, as well as for `origin` and acceleration. However, in this case, we haven't yet treated `year` and `origin` as factor variables so the decision boundaries are somewhat misleading. 
 
 Finally, from the correlation plot, we see that our outcome variable has the highest correlation with `cylinders`, `weight`, and `displacement`. Moreover, `cylinders`, `displacemebt`, and `horsepower` all have high collinearity, potentially leading to some redundancy in a model that includes all three covariates.
 
@@ -187,7 +187,7 @@ coef(model.mars$finalModel) %>% knitr::kable(col.names = "Coefficient")
 vip(model.mars$finalModel)
 ```
 
-Overall, our MARS model tells us that `displacement` is the most important continuous variable, with indicators `year82` and `year73` following closely behind, based on the overall impact of each variable on our regression function following a backward elimination procedure. Using `earth`, our model selects 15 out of 24 terms, representing 9 of 19 predictors (nprune terms = 17). The model is optimized with and has an R-squared of 0.789.
+Overall, our MARS model tells us that `displacement` is the most important continuous variable, with indicators `year82` and `year73` following closely behind, based on the overall impact of each variable on our regression function following a backward elimination procedure. Using `earth`, our model selects 15 out of 24 terms, representing 9 of 19 predictors (nprune terms = 17, product degree = 3). The model is optimized with and has an R-squared of 0.789.
 
 ## Part (d): LDA & QDA
 
@@ -286,7 +286,7 @@ confusionMatrix(data = as.factor(lda_class),
 # Plot ROC curve for best model (LDA)
 modelName = "LDA model"
 
-ggroc(list(roc.lda), legacy.axes = TRUE) + 
+pROC::ggroc(list(roc.lda), legacy.axes = TRUE) + 
   scale_color_discrete(labels = paste0(modelName, " (", round(auc_lda, 2),")"),
                        name = "Model Type (AUC)") + 
   geom_abline(intercept = 0, slope = 1, color = "grey")
